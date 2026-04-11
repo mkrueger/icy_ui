@@ -204,11 +204,16 @@ impl MacContextMenu {
         // SAFETY: Caller guarantees view_ptr is valid
         let view: &NSView = unsafe { &*(view_ptr as *const NSView) };
 
-        // Convert from top-left origin (iced) to bottom-left origin (macOS)
-        // by getting the view's bounds height and flipping Y
-        let bounds = view.bounds();
-        let flipped_y = bounds.size.height - y;
-        let location = NSPoint::new(x, flipped_y);
+        // popUpMenuPositioningItem:atLocation:inView: uses the view's
+        // coordinate system.  Winit's WinitView overrides isFlipped → true,
+        // so the origin is already top-left (matching iced).  Only flip when
+        // the view is *not* flipped (default AppKit bottom-left origin).
+        let location = if view.isFlipped() {
+            NSPoint::new(x, y)
+        } else {
+            let bounds = view.bounds();
+            NSPoint::new(x, bounds.size.height - y)
+        };
 
         // Show the context menu
         // SAFETY: Objective-C message send

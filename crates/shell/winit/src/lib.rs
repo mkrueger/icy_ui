@@ -1723,26 +1723,39 @@ async fn run_instance<P>(
                                                 {
                                                     let ns_view_ptr = appkit_handle.ns_view.as_ptr()
                                                         as *mut std::ffi::c_void;
-                                                    let window_height =
-                                                        window.state.logical_size().height;
-                                                    let flipped_y =
-                                                        window_height - ctx_req.position.y;
 
+                                                    // Position is passed in iced coordinates (top-left origin).
+                                                    // The macOS menu function handles the Y-flip internally.
                                                     #[allow(unsafe_code)]
                                                     if let Some(selected_id) = unsafe {
                                                         ctx_menu.show_items_and_wait(
                                                             &ctx_req.items,
                                                             ns_view_ptr,
                                                             f64::from(ctx_req.position.x),
-                                                            f64::from(flipped_y),
+                                                            f64::from(ctx_req.position.y),
                                                         )
                                                     } {
-                                                        events.push((
-                                                            id,
+                                                        let ctx_event =
                                                             core::Event::ContextMenuItemSelected(
                                                                 selected_id,
-                                                            ),
-                                                        ));
+                                                            );
+
+                                                        // Process the event through the UI immediately
+                                                        // so the ContextMenu widget can translate the
+                                                        // MenuId into the corresponding app message.
+                                                        if let Some(ui) =
+                                                            user_interfaces.get_mut(&id)
+                                                        {
+                                                            let (_, _) = ui.update(
+                                                                &[ctx_event.clone()],
+                                                                window.state.cursor(),
+                                                                &mut window.renderer,
+                                                                &mut clipboard,
+                                                                &mut messages,
+                                                            );
+                                                        }
+
+                                                        events.push((id, ctx_event));
                                                     }
                                                 }
                                             }
