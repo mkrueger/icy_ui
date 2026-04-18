@@ -495,7 +495,20 @@ where
                                     ..
                                 }) | Touch(FingerLifted { .. })
                             );
-                        needs_reset |= self.close_condition.click_outside && !is_inside;
+                        // Only close on Left-click outside (or touch).
+                        // Right-click outside is handled by the ContextMenu
+                        // widget which can properly close and reopen in one
+                        // step, avoiding a race between the overlay and widget
+                        // event loops.
+                        needs_reset |= self.close_condition.click_outside
+                            && !is_inside
+                            && matches!(
+                                event,
+                                Mouse(ButtonReleased {
+                                    button: mouse::Button::Left,
+                                    ..
+                                }) | Touch(FingerLifted { .. })
+                            );
 
                         if needs_reset {
                             state.reset();

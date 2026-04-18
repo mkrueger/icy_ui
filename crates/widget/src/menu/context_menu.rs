@@ -400,6 +400,23 @@ where
             });
             shell.capture_event();
             shell.request_redraw();
+
+            // When closing because of a right-click press, immediately reopen
+            // the context menu at the new position.  This is needed because
+            // the overlay event loop may have already captured the matching
+            // ButtonReleased(Right) via its `click_outside` close logic,
+            // preventing the widget tree from ever seeing the release event
+            // that would normally trigger the reopen.
+            if self.context_menu.is_some() && cursor.is_over(bounds) && right_button_pressed(event)
+            {
+                state.context_cursor = cursor.position().unwrap_or_default();
+                state.menu_bar_state.inner.with_data_mut(|state| {
+                    state.open = true;
+                    state.view_cursor = cursor;
+                    state.active_root.clear();
+                    state.active_root.push(0);
+                });
+            }
         }
 
         if !was_open && cursor.is_over(bounds) {
@@ -451,7 +468,10 @@ where
 
                 shell.capture_event();
                 shell.request_redraw();
-                return;
+                // Don't return early — let the content widget also see the
+                // ButtonReleased event so it can clean up any in-progress
+                // state (e.g. drag tracking started on the matching
+                // ButtonPressed).
             } else if !was_open
                 && (right_button_released(event)
                     || touch_lifted(event)
@@ -567,6 +587,16 @@ fn right_button_released(event: &Event) -> bool {
     matches!(
         event,
         Event::Mouse(mouse::Event::ButtonReleased {
+            button: mouse::Button::Right,
+            ..
+        })
+    )
+}
+
+fn right_button_pressed(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Mouse(mouse::Event::ButtonPressed {
             button: mouse::Button::Right,
             ..
         })
