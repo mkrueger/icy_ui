@@ -1938,43 +1938,13 @@ where
 
         // Draw virtual content
         if scrollbars.active() {
-            // Calculate visible viewport in content coordinates
-            // Like egui: the viewport is simply the visible area offset by the scroll position
-            let visible_viewport = Rectangle {
-                x: translation.x,
-                y: translation.y,
-                width: viewport_size
-                    .width
-                    .min(content_bounds.width - translation.x)
-                    .max(0.0),
-                height: viewport_size
-                    .height
-                    .min(content_bounds.height - translation.y)
-                    .max(0.0),
-            };
 
-            // Try to use cached content from layout(), otherwise regenerate
+            // Use cached content from layout(). The tree was diffed against
+            // this cached widget, so it is safe to draw with `&Tree`. Even if
+            // the viewport drifted slightly, drawing the cached content avoids
+            // flicker; the next layout pass will refresh it.
             let cached = self.cached_content.borrow();
-            let content_from_cache = cached.as_ref().and_then(|(cached_vp, _)| {
-                // Check if viewport matches (use same epsilon as layout)
-                const EPSILON: f32 = 0.01;
-                if (cached_vp.x - visible_viewport.x).abs() <= EPSILON
-                    && (cached_vp.y - visible_viewport.y).abs() <= EPSILON
-                    && (cached_vp.width - visible_viewport.width).abs() <= EPSILON
-                    && (cached_vp.height - visible_viewport.height).abs() <= EPSILON
-                {
-                    Some(())
-                } else {
-                    None
-                }
-            });
-
-            if content_from_cache.is_some() {
-                // Use cached content - borrow it for drawing
-                let cached = self.cached_content.borrow();
-                let (_, content) = cached.as_ref().unwrap();
-
-                // Get the tree for the content - must exist after layout()
+            if let Some((_, content)) = cached.as_ref() {
                 let Some(content_tree) = tree.children.first() else {
                     return;
                 };
@@ -2006,15 +1976,6 @@ where
                         });
                     }
                 });
-            } else {
-                // Cache miss in a read-only path: we cannot rebuild the content
-                // here because we only have `&Tree` and therefore cannot call
-                // `Tree::diff` against the freshly built widget. Walking the
-                // existing tree against a different widget shape would panic
-                // (e.g. `tree.children[0]` in a child widget that was diffed
-                // against a different sibling layout). Skip drawing this frame;
-                // the next `layout`/`update` pass will reconcile the tree.
-                drop(cached);
             }
 
             // Draw scrollbars
@@ -2195,32 +2156,11 @@ where
             );
         } else {
             // No scrolling needed, render content directly
-            let visible_viewport = Rectangle {
-                x: 0.0,
-                y: 0.0,
-                width: viewport_size.width,
-                height: viewport_size.height,
-            };
 
-            // Try to use cached content from layout()
+            // Use cached content from layout(); see scrolling branch above
+            // for rationale.
             let cached = self.cached_content.borrow();
-            let content_from_cache = cached.as_ref().and_then(|(cached_vp, _)| {
-                const EPSILON: f32 = 0.01;
-                if (cached_vp.x - visible_viewport.x).abs() <= EPSILON
-                    && (cached_vp.y - visible_viewport.y).abs() <= EPSILON
-                    && (cached_vp.width - visible_viewport.width).abs() <= EPSILON
-                    && (cached_vp.height - visible_viewport.height).abs() <= EPSILON
-                {
-                    Some(())
-                } else {
-                    None
-                }
-            });
-
-            if content_from_cache.is_some() {
-                let cached = self.cached_content.borrow();
-                let (_, content) = cached.as_ref().unwrap();
-
+            if let Some((_, content)) = cached.as_ref() {
                 let Some(content_tree) = tree.children.first() else {
                     return;
                 };
@@ -2236,13 +2176,6 @@ where
                         &visible_bounds,
                     );
                 }
-            } else {
-                // Cache miss in a read-only path: we cannot rebuild the content
-                // here because we only have `&Tree` and therefore cannot call
-                // `Tree::diff` against the freshly built widget. Walking the
-                // existing tree against a different widget shape would panic.
-                // The next `layout`/`update` pass will reconcile the tree.
-                drop(cached);
             }
         }
     }
@@ -2288,17 +2221,6 @@ where
             return mouse::Interaction::None;
         }
 
-        let translation = state.translation(
-            self.direction,
-            Rectangle {
-                x: bounds.x,
-                y: bounds.y,
-                width: viewport_size.width,
-                height: viewport_size.height,
-            },
-            content_bounds,
-        );
-
         let cursor = match cursor_over_scrollable {
             Some(cursor_position) if !(mouse_over_x_scrollbar || mouse_over_y_scrollbar) => {
                 mouse::Cursor::Available(cursor_position)
@@ -2307,38 +2229,10 @@ where
         };
 
         // Get mouse interaction from content
-        let visible_viewport = Rectangle {
-            x: translation.x,
-            y: translation.y,
-            width: viewport_size
-                .width
-                .min(content_bounds.width - translation.x)
-                .max(0.0),
-            height: viewport_size
-                .height
-                .min(content_bounds.height - translation.y)
-                .max(0.0),
-        };
 
-        // Try to use cached content
+        // Use cached content from layout(); the tree was diffed against it.
         let cached = self.cached_content.borrow();
-        let content_from_cache = cached.as_ref().and_then(|(cached_vp, _)| {
-            const EPSILON: f32 = 0.01;
-            if (cached_vp.x - visible_viewport.x).abs() <= EPSILON
-                && (cached_vp.y - visible_viewport.y).abs() <= EPSILON
-                && (cached_vp.width - visible_viewport.width).abs() <= EPSILON
-                && (cached_vp.height - visible_viewport.height).abs() <= EPSILON
-            {
-                Some(())
-            } else {
-                None
-            }
-        });
-
-        if content_from_cache.is_some() {
-            let cached = self.cached_content.borrow();
-            let (_, content) = cached.as_ref().unwrap();
-
+        if let Some((_, content)) = cached.as_ref() {
             let Some(content_tree) = tree.children.first() else {
                 return mouse::Interaction::None;
             };
@@ -2355,12 +2249,6 @@ where
                 mouse::Interaction::None
             }
         } else {
-            // Cache miss in a read-only path: we cannot rebuild the content
-            // here because we only have `&Tree` and therefore cannot call
-            // `Tree::diff` against the freshly built widget. Walking the
-            // existing tree against a different widget shape would panic.
-            // The next `layout`/`update` pass will reconcile the tree.
-            drop(cached);
             mouse::Interaction::None
         }
     }
