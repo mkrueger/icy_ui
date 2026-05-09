@@ -2007,41 +2007,14 @@ where
                     }
                 });
             } else {
-                // Cache miss (shouldn't happen normally if layout was called) - regenerate
-                drop(cached); // Release the borrow before calling view
-                let content = (self.view)(visible_viewport);
-
-                // Get the tree for the content - must exist after layout()
-                let Some(content_tree) = tree.children.first() else {
-                    return;
-                };
-
-                renderer.with_layer(visible_bounds, |renderer| {
-                    if let Some(content_layout) = layout.children().next() {
-                        let (offset_x, offset_y) = if let Some(row_height) = self.row_height {
-                            let offset_y = translation.y % row_height;
-                            let offset_x = translation.x - translation.x.floor();
-                            (offset_x, offset_y)
-                        } else {
-                            (
-                                translation.x - translation.x.floor(),
-                                translation.y - translation.y.floor(),
-                            )
-                        };
-
-                        renderer.with_translation(Vector::new(-offset_x, -offset_y), |renderer| {
-                            content.as_widget().draw(
-                                content_tree,
-                                renderer,
-                                theme,
-                                defaults,
-                                content_layout,
-                                cursor,
-                                &visible_bounds,
-                            );
-                        });
-                    }
-                });
+                // Cache miss in a read-only path: we cannot rebuild the content
+                // here because we only have `&Tree` and therefore cannot call
+                // `Tree::diff` against the freshly built widget. Walking the
+                // existing tree against a different widget shape would panic
+                // (e.g. `tree.children[0]` in a child widget that was diffed
+                // against a different sibling layout). Skip drawing this frame;
+                // the next `layout`/`update` pass will reconcile the tree.
+                drop(cached);
             }
 
             // Draw scrollbars
@@ -2264,24 +2237,12 @@ where
                     );
                 }
             } else {
+                // Cache miss in a read-only path: we cannot rebuild the content
+                // here because we only have `&Tree` and therefore cannot call
+                // `Tree::diff` against the freshly built widget. Walking the
+                // existing tree against a different widget shape would panic.
+                // The next `layout`/`update` pass will reconcile the tree.
                 drop(cached);
-                let content = (self.view)(visible_viewport);
-
-                let Some(content_tree) = tree.children.first() else {
-                    return;
-                };
-
-                if let Some(content_layout) = layout.children().next() {
-                    content.as_widget().draw(
-                        content_tree,
-                        renderer,
-                        theme,
-                        defaults,
-                        content_layout,
-                        cursor,
-                        &visible_bounds,
-                    );
-                }
             }
         }
     }
@@ -2394,24 +2355,13 @@ where
                 mouse::Interaction::None
             }
         } else {
+            // Cache miss in a read-only path: we cannot rebuild the content
+            // here because we only have `&Tree` and therefore cannot call
+            // `Tree::diff` against the freshly built widget. Walking the
+            // existing tree against a different widget shape would panic.
+            // The next `layout`/`update` pass will reconcile the tree.
             drop(cached);
-            let content = (self.view)(visible_viewport);
-
-            let Some(content_tree) = tree.children.first() else {
-                return mouse::Interaction::None;
-            };
-
-            if let Some(content_layout) = layout.children().next() {
-                content.as_widget().mouse_interaction(
-                    content_tree,
-                    content_layout,
-                    cursor,
-                    &bounds,
-                    renderer,
-                )
-            } else {
-                mouse::Interaction::None
-            }
+            mouse::Interaction::None
         }
     }
 
