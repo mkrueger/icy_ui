@@ -996,19 +996,23 @@ where
         // Also check if the cache key changed (data invalidation)
         let cache_key_changed = state.cached_key != self.cache_key;
 
+        // Always rebuild the content element for this frame.
+        // `cached_content` lives on the widget value (not the tree state), so it is
+        // empty every frame. `draw()` / `mouse_interaction()` only paint from this
+        // cache, so skipping the rebuild when the viewport is unchanged leaves the
+        // scroll area blank after the first layout reuse.
+        let mut content = (self.view)(visible_viewport);
+
+        // Create a temporary tree for the content
+        if tree.children.is_empty() {
+            tree.children.push(Tree::new(content.as_widget()));
+        } else {
+            tree.children[0].diff(content.as_widget());
+        }
+
         let content_node =
             if viewport_changed || cache_key_changed || state.cached_content_layout.is_none() {
-                // Viewport changed, cache key changed, or no cache - call the view callback
-                let mut content = (self.view)(visible_viewport);
-
-                // Create a temporary tree for the content
-                if tree.children.is_empty() {
-                    tree.children.push(Tree::new(content.as_widget()));
-                } else {
-                    tree.children[0].diff(content.as_widget());
-                }
-
-                // Layout the visible content within the visible bounds
+                // Viewport changed, cache key changed, or no cache - lay out content
                 let content_limits =
                     layout::Limits::new(Size::ZERO, Size::new(viewport_width, viewport_height));
                 let content_node = content.as_widget_mut().layout(
@@ -1022,14 +1026,14 @@ where
                 state.cached_content_layout = Some(content_node.clone());
                 state.cached_key = self.cache_key;
 
-                // Also cache the content element for draw() to reuse
-                *self.cached_content.borrow_mut() = Some((visible_viewport, content));
-
                 content_node
             } else {
-                // Viewport and cache key unchanged - reuse cached layout
+                // Viewport and cache key unchanged - reuse cached layout geometry
                 state.cached_content_layout.clone().unwrap()
             };
+
+        // Always store the content element so draw()/update() can use it this frame.
+        *self.cached_content.borrow_mut() = Some((visible_viewport, content));
 
         // The main node has the outer bounds, with content as child (shrunken by right/bottom padding)
         layout::Node::with_children(bounds, vec![content_node])
