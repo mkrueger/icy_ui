@@ -45,7 +45,8 @@ pub enum PlatformSpecific {
 /// Describes an event specific to MacOS
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MacOS {
-    /// Triggered when the app receives an URL from the system
+    /// Triggered when the app receives a URL from the system, including a
+    /// `file://` URL for a document opened through Finder or Launch Services.
     ///
     /// _**Note:** For this event to be triggered, the executable needs to be properly [bundled]!_
     ///

@@ -73,8 +73,9 @@ where
     })
 }
 
-/// Creates a [`Subscription`] that notifies of custom application URL
-/// received from the system.
+/// Creates a [`Subscription`] that notifies of an application URL received
+/// from the system. On macOS, this also includes `file://` URLs for documents
+/// opened through Finder or Launch Services.
 ///
 /// _**Note:** Currently, it only triggers on macOS and the executable needs to be properly [bundled]!_
 ///

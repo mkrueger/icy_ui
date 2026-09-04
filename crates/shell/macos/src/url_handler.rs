@@ -1,4 +1,4 @@
-//! URL handler for macOS custom URL schemes.
+//! URL handler for macOS custom URL schemes and Finder open-document events.
 //!
 //! This module allows your application to handle custom URL schemes like `myapp://action`.
 //! It works by registering an Apple Event handler for `kAEGetURL` events.
@@ -31,8 +31,12 @@ use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, sel};
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol};
 
-/// Apple Event constants for URL handling.
+/// Apple Event constants for URL and document handling.
 mod constants {
+    /// The event class for core Apple Events (kCoreEventClass = 'aevt').
+    pub const K_CORE_EVENT_CLASS: u32 = 0x6165_7674;
+    /// The event ID for opening documents (kAEOpenDocuments = 'odoc').
+    pub const K_AE_OPEN_DOCUMENTS: u32 = 0x6f64_6f63;
     /// The event class for internet events (kInternetEventClass = 'GURL').
     pub const K_INTERNET_EVENT_CLASS: u32 = 0x4755524c;
     /// The event ID for getting a URL (kAEGetURL = 'GURL').
@@ -123,12 +127,18 @@ define_class!(
             event: *mut AnyObject,
             _reply_event: *mut AnyObject,
         ) {
-            if let Some(url) = parse_url_from_event(event) {
-                if let Some(sender) = URL_SENDER.get() {
-                    // Ignore send errors (receiver might have been dropped)
-                    let _ = sender.send(url);
-                }
-            }
+            forward_urls(event);
+        }
+
+        /// Handle documents opened from Finder or Launch Services.
+        #[unsafe(method(handleOpenDocumentsEvent:withReplyEvent:))]
+        #[allow(non_snake_case)]
+        fn handleOpenDocumentsEvent_withReplyEvent(
+            &self,
+            event: *mut AnyObject,
+            _reply_event: *mut AnyObject,
+        ) {
+            forward_urls(event);
         }
     }
 
@@ -187,28 +197,50 @@ unsafe fn register_url_handler() {
         andEventID: K_AE_GET_URL
     ];
 
+    // Register for files opened through Finder, `open`, or Launch Services.
+    let _: () = msg_send![
+        shared_manager,
+        setEventHandler: &*handler,
+        andSelector: sel!(handleOpenDocumentsEvent:withReplyEvent:),
+        forEventClass: K_CORE_EVENT_CLASS,
+        andEventID: K_AE_OPEN_DOCUMENTS
+    ];
+
     // Keep the handler alive by leaking it (it needs to live for the app's lifetime)
     std::mem::forget(handler);
 
-    log::debug!("UrlHandler: Registered Apple Event handler for URL scheme");
+    log::debug!("UrlHandler: Registered Apple Event handlers for URLs and documents");
 }
 
-/// Parse a URL from an Apple Event.
+fn forward_urls(event: *mut AnyObject) {
+    let Some(sender) = URL_SENDER.get() else {
+        return;
+    };
+
+    for url in parse_urls_from_event(event) {
+        // Ignore send errors (receiver might have been dropped).
+        let _ = sender.send(url);
+    }
+}
+
+/// Parse URLs from a URL or open-documents Apple Event.
 #[allow(unsafe_code)]
-fn parse_url_from_event(event: *mut AnyObject) -> Option<String> {
+fn parse_urls_from_event(event: *mut AnyObject) -> Vec<String> {
     use constants::*;
 
     if event.is_null() {
-        return None;
+        return Vec::new();
     }
 
     unsafe {
-        // Verify this is the right type of event
+        // Verify this is an event handled by this module.
         let event_class: u32 = msg_send![event, eventClass];
         let event_id: u32 = msg_send![event, eventID];
 
-        if event_class != K_INTERNET_EVENT_CLASS || event_id != K_AE_GET_URL {
-            return None;
+        let is_url = event_class == K_INTERNET_EVENT_CLASS && event_id == K_AE_GET_URL;
+        let is_open_documents = event_class == K_CORE_EVENT_CLASS && event_id == K_AE_OPEN_DOCUMENTS;
+        if !is_url && !is_open_documents {
+            return Vec::new();
         }
 
         // Get the URL parameter from the event
@@ -217,29 +249,62 @@ fn parse_url_from_event(event: *mut AnyObject) -> Option<String> {
             msg_send![event, paramDescriptorForKeyword: KEY_DIRECT_OBJECT];
 
         if subevent.is_null() {
-            return None;
+            return Vec::new();
         }
 
-        // Get the string value
-        // [subevent stringValue]
-        let nsstring: *mut AnyObject = msg_send![subevent, stringValue];
-
-        if nsstring.is_null() {
-            return None;
+        if is_url {
+            return descriptor_string(subevent).into_iter().collect();
         }
 
-        // Convert to Rust string
-        // [nsstring UTF8String]
-        let cstr: *const std::ffi::c_char = msg_send![nsstring, UTF8String];
-
-        if cstr.is_null() {
-            return None;
+        // The direct object of kAEOpenDocuments is an AEList containing file
+        // URL descriptors. Apple Event descriptor list indices are one-based.
+        let count: isize = msg_send![subevent, numberOfItems];
+        let mut urls = Vec::with_capacity(count.max(0) as usize);
+        for index in 1..=count {
+            let descriptor: *mut AnyObject = msg_send![subevent, descriptorAtIndex: index];
+            if let Some(url) = descriptor_file_url(descriptor) {
+                urls.push(url);
+            }
         }
-
-        Some(
-            std::ffi::CStr::from_ptr(cstr)
-                .to_string_lossy()
-                .into_owned(),
-        )
+        urls
     }
+}
+
+#[allow(unsafe_code)]
+unsafe fn descriptor_file_url(descriptor: *mut AnyObject) -> Option<String> {
+    if descriptor.is_null() {
+        return None;
+    }
+
+    let file_url: *mut AnyObject = unsafe { msg_send![descriptor, fileURLValue] };
+    if file_url.is_null() {
+        return descriptor_string(descriptor);
+    }
+
+    let absolute_string: *mut AnyObject = unsafe { msg_send![file_url, absoluteString] };
+    nsstring_to_string(absolute_string)
+}
+
+#[allow(unsafe_code)]
+fn descriptor_string(descriptor: *mut AnyObject) -> Option<String> {
+    if descriptor.is_null() {
+        return None;
+    }
+
+    let nsstring: *mut AnyObject = unsafe { msg_send![descriptor, stringValue] };
+    nsstring_to_string(nsstring)
+}
+
+#[allow(unsafe_code)]
+fn nsstring_to_string(nsstring: *mut AnyObject) -> Option<String> {
+    if nsstring.is_null() {
+        return None;
+    }
+
+    let cstr: *const std::ffi::c_char = unsafe { msg_send![nsstring, UTF8String] };
+    if cstr.is_null() {
+        return None;
+    }
+
+    Some(unsafe { std::ffi::CStr::from_ptr(cstr) }.to_string_lossy().into_owned())
 }
